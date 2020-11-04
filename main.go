@@ -4,94 +4,122 @@ package main
 import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
-	"golang.org/x/net"
-	"html"
+	"log"
+	"golang.org/x/net/html"
+	"strings"
+	"github.com/bmaupin/go-epub"
+	"bytes"
 )
 
 func main() {
-	ConstructArticleFromURL("https://www.quantamagazine.org/deep-neural-networks-help-to-explain-living-brains-20201028/")
-
-	//TODO - set up source control. Work out how to have packages. Construct package to write epub file using go-epub https://pkg.go.dev/github.com/bmaupin/go-epub
+	article, err := ConstructArticleFromURL("https://www.quantamagazine.org/deep-neural-networks-help-to-explain-living-brains-20201028/")
+	if err != nil {
+		fmt.Print(err.Error())
+		log.Fatal(err)
+	}
+	
+	epubDocument  := epub.NewEpub(article.Title)
+	
+	epubDocument.SetAuthor(article.Author)
+	
+	epubDocument.SetDescription(article.Blurb)
+	
+	epubDocument.AddSection(*article.Body, "Section 1", "", "")
+	
+	epubDocument.Write("test.epub")
 }
 
 type Article struct {
-	title           string
-	blurb           string
-	author          string
-	leadingImageUrl string
-	sections        []Section
+	Title           string
+	Blurb           string
+	Author          string
+	LeadingImageUrl string
+	Body			*string
 }
 
-type Section struct {
-}
-
-type Item struct {
-	itemType ItemType
-	content  string
-}
-
-type ItemType uint32
-
-const (
-	paragraph ItemType = iota
-	image
-)
-
-func ConstructArticleFromURL(url string) {
+func ConstructArticleFromURL(url string) (*Article, error) {
 	document, err := goquery.NewDocument(url)
 
 	articleRoot := document.Find("#postBody")
 
-	title, err := ExtractDataFromSingleNode(articleRoot, ".post__title__title")
+	title, err := ExtractDataFromeNode(articleRoot, ".post__title__title")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
+	}
+
+	blurb, err := ExtractDataFromeNode(articleRoot, ".post__title__excerpt")
+	if err != nil {
+		return nil, err
+	}
+
+	author, err := ExtractDataFromeNode(articleRoot, ".sidebar__author h3")
+	if err != nil {
+		return nil, err
 	}
 	
-	blurb, err := ExtractDataFromSingleNode(articleRoot, ".post__title__excerpt")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	author, err := ExtractDataFromSingleNode(articleRoot, ".mv05")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println(title)
-	fmt.Println(blurb)
-
 	imageNodes := articleRoot.Find("img").Nodes
 
 	for _, node := range imageNodes {
-		println(ExtractImageUrlFromImgNode(node))
+		url, err = ExtractImageUrlFromImgNode(node)
+		println(url, err)
 	}
-
-	contentRoot := articleRoot.Find(".post__content__section")
-
-	paragraphs := contentRoot.Find("p").Nodes
-
-	for _, paragraph := range paragraphs {
-		fmt.Println(paragraph.FirstChild.Data)
+	
+	body, err := GetArticleBody(articleRoot, ".post__content__section")
+	if err != nil{
+		return nil, err
 	}
+	
+	article := Article {
+		Title: title,
+		Blurb: blurb,
+		Author: author,
+		Body: body}
+
+	return &article, nil
 }
 
-func ExtractDataFromSingleNode(s *goquery.Selection, selector string) (string, error) {
+func GetArticleBody(articleRoot *goquery.Selection, selector string) (*string, error) {
+	
+	bodyNodes := articleRoot.Find(selector).Nodes
+	if len(bodyNodes) < 1{
+		return nil, fmt.Errorf("No nodes found...")
+	}
+	bodyNode := bodyNodes[0]
 
-	node := s.Find(selector).Nodes
-
-	if len(node) > 1 {
-		return "", fmt.Errorf("More than one node matched selector" + selector)
+	var b bytes.Buffer
+	err := html.Render(&b, bodyNode)
+	if (err != nil){
+		return nil, err
 	}
 
-	return node[0].FirstChild.Data, nil
+	body := b.String()
+	
+	return &body, nil
 }
 
-func ExtractImageUrlFromImgNode(a *Node) (string, error) {
+func ExtractDataFromeNode(s *goquery.Selection, selectors ...string) (string, error) {
+	
+	for _, selector := range selectors {
+		s = s.Find(selector)
+	}
+	
+	nodes := s.Nodes
+
+	if len(nodes) < 1 {
+		return "", fmt.Errorf("No nodes matched selector: " + strings.Join(selectors, " "))
+	}
+
+	return nodes[0].FirstChild.Data, nil
+}
+
+func ExtractImageUrlFromImgNode(node *html.Node) (string, error) {
 
 	for _, attribute := range node.Attr {
 		if attribute.Key == "src" {
-			return attribute.Val
+			return attribute.Val, nil
 		}
 	}
+	
+	return "", fmt.Errorf("Could not find image URL")
 }
 
